@@ -1,0 +1,30 @@
+{
+  "name": "skill-lab-marketplace",
+  "description": "Marketplace for Skill Lab - Blue-Green development environment for Claude Code skills",
+  "plugins": [
+    {
+      "name": "skill-lab",
+      "description": "Blue-Green development environment for Claude Code skills. Safely develop and test skills in an isolated experimental environment before promoting to stable/production. Features Git Worktree isolation, automatic skill detection, and natural language control.",
+      "version": "1.0.0",
+      "source": ".",
+      "keywords": [
+        "skills",
+        "development",
+        "sandbox",
+        "blue-green",
+        "environment",
+        "isolation",
+        "experimental"
+      ],
+      "author": {
+        "name": "Skill Lab Contributors"
+      },
+      "license": "MIT",
+      "homepage": "https://github.com/your-username/skill-lab",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/your-username/skill-lab.git"
+      }
+    }
+  ]
+}
