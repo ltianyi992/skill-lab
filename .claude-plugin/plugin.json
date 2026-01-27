@@ -15,5 +15,9 @@
     "isolation"
   ],
   "license": "MIT",
-  "agents": "./agents/"
+  "agents": [
+    {
+      "path": "../agents/skill-matcher.md"
+    }
+  ]
 }
