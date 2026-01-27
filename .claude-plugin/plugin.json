@@ -14,5 +14,6 @@
     "environment",
     "isolation"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "agents": "./agents/"
 }

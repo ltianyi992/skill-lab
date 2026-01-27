@@ -2,6 +2,7 @@
 name: setup
 description: "Initialize the Blue-Green skill development environment. Creates stable and experimental folders with Git Worktree isolation. Run this once after installing the plugin. Use when: user wants to set up skill-lab, initialize environment, or first time setup."
 disable-model-invocation: true
+allowed-tools: Bash(python *)
 ---
 
 # Environment Setup
@@ -18,13 +19,34 @@ Initialize the Blue-Green development environment for skill development.
 
 ## Execution
 
-Run the bootstrap script:
+> **⚠️ CRITICAL: You MUST execute the bootstrap.py script below. Do NOT attempt to create the environment manually.**
+
+Run the bootstrap script using the exact command:
 
 ```bash
-python "$PLUGIN_ROOT/scripts/bootstrap.py"
+python "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py"
 ```
 
-Where `$PLUGIN_ROOT` is the directory containing this plugin.
+**Important Notes:**
+- `${CLAUDE_PLUGIN_ROOT}` is automatically set by Claude Code to this plugin's directory
+- Do NOT substitute or modify this variable
+- Do NOT create folders or links manually - the script handles everything
+
+## Verification
+
+After running the script, verify the setup by checking the global link target:
+
+**Windows:**
+```bash
+dir "%USERPROFILE%\.claude\skills"
+```
+
+**Mac/Linux:**
+```bash
+ls -la ~/.claude/skills
+```
+
+The link MUST point to `skills-stable`, NOT `skills-experimental`.
 
 ## Post-Setup
 

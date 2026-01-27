@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "Bash(claude plugin validate:*)"
+      "Bash(claude plugin validate:*)",
+      "Bash(tree:*)"
     ]
   }
 }

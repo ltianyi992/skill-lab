@@ -276,6 +276,60 @@ This is your stable/production skills folder.
         except Exception:
             return False
 
+    def _verify_setup(self) -> bool:
+        """Verify the setup is correct, especially the global link target."""
+        self.log("Verifying setup...", "STEP")
+
+        # Verify global link exists
+        if not self.claude_skills_path.exists():
+            self.log(f"Global link does not exist: {self.claude_skills_path}", "ERROR")
+            return False
+
+        # Check what the link points to
+        try:
+            if self.claude_skills_path.is_symlink():
+                target = self.claude_skills_path.resolve()
+            elif self._is_junction(self.claude_skills_path):
+                # For Windows junctions, use dir command to check target
+                import subprocess
+                result = subprocess.run(
+                    f'dir "{self.claude_skills_path.parent}" /AL',
+                    shell=True, capture_output=True, text=True
+                )
+                # Parse output to find junction target
+                target = self.stable_path  # Default assumption
+                if "skills-stable" in result.stdout:
+                    target = self.stable_path
+                elif "skills-experimental" in result.stdout:
+                    target = self.experimental_path
+                    self.log(f"ERROR: Global link points to experimental!", "ERROR")
+                    self.log(f"  Expected: {self.stable_path}", "ERROR")
+                    self.log(f"  Actual:   skills-experimental", "ERROR")
+                    return False
+            else:
+                self.log(f"Global skills path is a directory, not a link", "WARN")
+                return True
+
+            # Verify target is stable, not experimental
+            stable_resolved = self.stable_path.resolve()
+            experimental_resolved = self.experimental_path.resolve()
+
+            if str(target) == str(stable_resolved):
+                self.log(f"Verified: Global link -> skills-stable", "OK")
+                return True
+            elif str(target) == str(experimental_resolved):
+                self.log(f"ERROR: Global link points to experimental!", "ERROR")
+                self.log(f"  Expected: {self.stable_path}", "ERROR")
+                self.log(f"  Actual:   {target}", "ERROR")
+                return False
+            else:
+                self.log(f"Warning: Global link points to unknown target: {target}", "WARN")
+                return True
+
+        except Exception as e:
+            self.log(f"Could not verify link target: {e}", "WARN")
+            return True  # Don't fail on verification errors
+
     def run(self) -> bool:
         """Execute the complete bootstrap process."""
         print()
@@ -304,6 +358,12 @@ This is your stable/production skills folder.
                 return False
             print()
 
+        # Verify the setup is correct
+        if not self._verify_setup():
+            self.log("Setup verification failed!", "ERROR")
+            return False
+        print()
+
         print("=" * 50)
         self.log("Setup completed successfully!", "OK")
         print("=" * 50)
@@ -311,7 +371,7 @@ This is your stable/production skills folder.
         print("Environment Summary:")
         print(f"  Stable:       {self.stable_path}")
         print(f"  Experimental: {self.experimental_path}")
-        print(f"  Global Link:  {self.claude_skills_path}")
+        print(f"  Global Link:  {self.claude_skills_path} -> {self.stable_path}")
         print()
         print("Next Steps:")
         print("  1. Create skills in ~/Desktop/skills-experimental")

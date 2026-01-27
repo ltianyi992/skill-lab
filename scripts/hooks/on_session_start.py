@@ -171,20 +171,6 @@ def main():
     # Get experimental skills
     experimental_skills = get_experimental_skills(experimental_path)
 
-    # Output data for Claude to process
-    output = {
-        "skill_lab_status": "ready",
-        "project": {
-            "path": str(project_path),
-            "is_linked_to_experimental": is_linked,
-            "extensions": project_data["extensions"][:20],  # Top 20
-            "extension_counts": dict(list(project_data["extension_counts"].items())[:20]),
-            "total_files": project_data["total_files"]
-        },
-        "experimental_skills": experimental_skills,
-        "has_experimental_skills": len(experimental_skills) > 0
-    }
-
     # If linked, set flag for stop hook to potentially remind about unlinking
     if is_linked:
         # Write state file for stop hook to read
@@ -196,7 +182,52 @@ def main():
             "session_id": hook_input.get("session_id", "unknown")
         }))
 
-    print(json.dumps(output, indent=2))
+    # Check if we should prompt about experimental skills
+    # Conditions: has experimental skills, project not linked, project has matching extensions
+    if experimental_skills and not is_linked:
+        # Build skill info for context
+        skill_list = []
+        for skill in experimental_skills:
+            skill_info = f"- {skill['name']}"
+            if skill.get('description'):
+                skill_info += f": {skill['description']}"
+            skill_list.append(skill_info)
+
+        skills_text = "\n".join(skill_list)
+        extensions_text = ", ".join(project_data["extensions"][:10])
+
+        # Output using hookSpecificOutput.additionalContext format
+        output = {
+            "hookSpecificOutput": {
+                "additionalContext": f"""[Skill Lab] Detected experimental skills available:
+
+{skills_text}
+
+Project file types: {extensions_text}
+
+The project is NOT currently linked to experimental skills.
+Use the skill-lab:skill-matcher agent to analyze if any experimental skills match this project's needs.
+If matches are found, ask the user: "I found experimental skills that may be useful for this project. Would you like to link them using /skill-lab:link?"
+
+Do NOT automatically link - always ask the user first."""
+            }
+        }
+        print(json.dumps(output, indent=2))
+    else:
+        # Output standard data for reference
+        output = {
+            "skill_lab_status": "ready",
+            "project": {
+                "path": str(project_path),
+                "is_linked_to_experimental": is_linked,
+                "extensions": project_data["extensions"][:20],
+                "extension_counts": dict(list(project_data["extension_counts"].items())[:20]),
+                "total_files": project_data["total_files"]
+            },
+            "experimental_skills": experimental_skills,
+            "has_experimental_skills": len(experimental_skills) > 0
+        }
+        print(json.dumps(output, indent=2))
 
 
 if __name__ == "__main__":
