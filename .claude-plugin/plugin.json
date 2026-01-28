@@ -17,6 +17,6 @@
     "isolation"
   ],
   "skills": "./skills/",
-  "agents": "./agents/",
+  "agents": "./agents/skill-matcher.md",
   "hooks": "./hooks/hooks.json"
 }
