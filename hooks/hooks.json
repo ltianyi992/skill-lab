@@ -2,24 +2,16 @@
   "hooks": {
     "SessionStart": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/on_session_start.py\"",
-            "timeout": 30
-          }
-        ]
+        "type": "command",
+        "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/on_session_start.py\"",
+        "timeout": 30
       }
     ],
     "Stop": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/on_stop.py\"",
-            "timeout": 10
-          }
-        ]
+        "type": "command",
+        "command": "python \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/on_stop.py\"",
+        "timeout": 10
       }
     ]
   }

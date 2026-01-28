@@ -114,15 +114,81 @@ class SkillLabHandler:
 
         return result
 
+    def _get_pip_path(self, base_path: Path) -> Path:
+        """Get the pip executable path for a venv."""
+        if self.os_type == "Windows":
+            return base_path / ".venv" / "Scripts" / "pip.exe"
+        else:
+            return base_path / ".venv" / "bin" / "pip"
+
+    def _sync_dependencies(self) -> Dict[str, any]:
+        """Sync dependencies from experimental to stable venv."""
+        result = {
+            "synced": False,
+            "packages": [],
+            "error": None
+        }
+
+        # Check if stable venv exists
+        stable_venv = self.stable_path / ".venv"
+        if not stable_venv.exists():
+            result["error"] = "Stable venv not found. Run /skill-lab:setup first."
+            return result
+
+        # Check for requirements.txt in stable (merged from experimental)
+        requirements_file = self.stable_path / "requirements.txt"
+        if not requirements_file.exists():
+            # No requirements.txt, nothing to sync
+            result["synced"] = True
+            result["packages"] = []
+            return result
+
+        # Install dependencies
+        pip_path = self._get_pip_path(self.stable_path)
+        if not pip_path.exists():
+            result["error"] = f"Pip not found at {pip_path}"
+            return result
+
+        try:
+            proc = subprocess.run(
+                [str(pip_path), "install", "-r", str(requirements_file)],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minutes timeout for pip install
+            )
+
+            if proc.returncode != 0:
+                result["error"] = f"pip install failed: {proc.stderr}"
+                return result
+
+            # Parse installed packages from output
+            for line in proc.stdout.split("\n"):
+                if "Successfully installed" in line:
+                    # Extract package names
+                    packages = line.replace("Successfully installed", "").strip().split()
+                    result["packages"] = packages
+                    break
+
+            result["synced"] = True
+
+        except subprocess.TimeoutExpired:
+            result["error"] = "pip install timed out"
+        except Exception as e:
+            result["error"] = str(e)
+
+        return result
+
     def auto_commit_and_merge(self, commit_message: Optional[str] = None) -> Dict[str, any]:
         """Commit changes in experimental and merge to stable."""
         result = {
             "success": False,
             "committed": False,
             "merged": False,
+            "dependencies_synced": False,
             "commit_hash": None,
             "message": None,
-            "error": None
+            "error": None,
+            "installed_packages": []
         }
 
         # Check for changes
@@ -177,8 +243,21 @@ class SkillLabHandler:
             return result
 
         result["merged"] = True
+
+        # Sync dependencies to stable venv
+        dep_result = self._sync_dependencies()
+        if dep_result["synced"]:
+            result["dependencies_synced"] = True
+            result["installed_packages"] = dep_result.get("packages", [])
+        elif dep_result["error"]:
+            # Don't fail the whole sync, just warn about dependencies
+            result["dependency_warning"] = dep_result["error"]
+
         result["success"] = True
-        result["message"] = f"Successfully synced and merged commit {result['commit_hash']}"
+        msg = f"Successfully synced and merged commit {result['commit_hash']}"
+        if result["installed_packages"]:
+            msg += f" (installed {len(result['installed_packages'])} packages)"
+        result["message"] = msg
 
         return result
 
@@ -223,10 +302,19 @@ class SkillLabHandler:
         # Create the link
         try:
             if self.os_type == "Windows":
+                # Windows requires cmd.exe for mklink command (not powershell)
                 cmd = f'mklink /J "{link_path}" "{self.experimental_path}"'
-                proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                proc = subprocess.run(
+                    ["cmd.exe", "/c", cmd],
+                    capture_output=True,
+                    text=True
+                )
                 if proc.returncode != 0:
-                    raise Exception(proc.stderr)
+                    error_msg = proc.stderr.strip() or proc.stdout.strip()
+                    result["error"] = f"Failed to create junction: {error_msg}"
+                    result["hint"] = "On Windows, try running CMD as Administrator with command:"
+                    result["manual_command"] = f'mklink /J "{link_path}" "{self.experimental_path}"'
+                    return result
             else:
                 os.symlink(self.experimental_path, link_path)
 
@@ -237,6 +325,9 @@ class SkillLabHandler:
 
         except Exception as e:
             result["error"] = f"Failed to create link: {e}"
+            if self.os_type == "Windows":
+                result["hint"] = "On Windows, try running CMD as Administrator with command:"
+                result["manual_command"] = f'mklink /J "{link_path}" "{self.experimental_path}"'
 
         return result
 
@@ -316,22 +407,35 @@ class SkillLabHandler:
         return result
 
     def inject_env_vars(self) -> Dict[str, str]:
-        """Get environment variables for the experimental Python environment."""
-        venv_path = self.experimental_path / ".venv"
+        """Get environment variables for both experimental and stable Python environments."""
+        exp_venv = self.experimental_path / ".venv"
+        stable_venv = self.stable_path / ".venv"
 
         if self.os_type == "Windows":
-            python_path = venv_path / "Scripts" / "python.exe"
-            pip_path = venv_path / "Scripts" / "pip.exe"
+            exp_python = exp_venv / "Scripts" / "python.exe"
+            exp_pip = exp_venv / "Scripts" / "pip.exe"
+            stable_python = stable_venv / "Scripts" / "python.exe"
+            stable_pip = stable_venv / "Scripts" / "pip.exe"
         else:
-            python_path = venv_path / "bin" / "python"
-            pip_path = venv_path / "bin" / "pip"
+            exp_python = exp_venv / "bin" / "python"
+            exp_pip = exp_venv / "bin" / "pip"
+            stable_python = stable_venv / "bin" / "python"
+            stable_pip = stable_venv / "bin" / "pip"
 
         return {
-            "EXPERIMENTAL_PYTHON": str(python_path),
-            "EXPERIMENTAL_PIP": str(pip_path),
-            "EXPERIMENTAL_VENV": str(venv_path),
+            # Experimental environment (for development)
+            "EXPERIMENTAL_PYTHON": str(exp_python),
+            "EXPERIMENTAL_PIP": str(exp_pip),
+            "EXPERIMENTAL_VENV": str(exp_venv),
             "EXPERIMENTAL_PATH": str(self.experimental_path),
+            # Stable environment (for production use)
+            "STABLE_PYTHON": str(stable_python),
+            "STABLE_PIP": str(stable_pip),
+            "STABLE_VENV": str(stable_venv),
             "STABLE_PATH": str(self.stable_path),
+            # Default SKILL_PYTHON points to stable (used by ~/.claude/skills)
+            "SKILL_PYTHON": str(stable_python),
+            "SKILL_PIP": str(stable_pip),
         }
 
     def _parse_skill_frontmatter(self, skill_md_path: Path) -> Optional[Dict[str, str]]:

@@ -1,49 +1,78 @@
 ---
 name: skill-matcher
-description: "Analyze project file types and match against available experimental skills. Use when: user wants to find relevant skills, check skill compatibility, or see what experimental skills match the current project."
+description: "PROACTIVE skill matching - Use this BEFORE starting any task that might benefit from experimental skills. Analyzes project files and semantic matches against available skills. MUST be called when user requests work on: PDF, documents, data processing, or any task matching experimental skill keywords."
 ---
 
 # Skill Matcher
 
-Analyze the current project and find matching experimental skills.
+**PROACTIVE WORKFLOW TOOL** - Analyze the current project and find matching experimental skills BEFORE starting tasks.
+
+## WHEN TO USE (IMPORTANT!)
+
+Call this skill-matcher **BEFORE** executing any user task when:
+
+1. User requests work on specific file types (PDF, Excel, images, etc.)
+2. User's task keywords match any experimental skill name or description
+3. Starting a new session in a project that hasn't been checked yet
+4. User explicitly asks about available skills
+
+**DO NOT** skip this step and jump directly to task execution!
 
 ## What This Does
 
 1. Scans the current project for file types
 2. Lists all available experimental skills from `~/Desktop/skills-experimental`
-3. Analyzes semantic matches between project needs and skill capabilities
-4. Reports which skills may be useful for this project
+3. Performs semantic matching between:
+   - User's task description
+   - Project file types
+   - Skill names and descriptions
+4. Reports which skills may be useful
 
 ## Execution
 
-Run the skill matcher using the main handler:
-
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/handler.py" detect
+python scripts/handler.py detect
 ```
 
-## Interpreting Results
+## Workflow After Detection
 
-The handler outputs JSON with:
+### If Matches Found (Project NOT Linked):
 
-- `project_extensions`: File types found in the current project
-- `experimental_skills`: Available skills with names and descriptions
-- `potential_matches`: Skills that may be relevant based on semantic matching
+1. **STOP** - Do not proceed with the original task yet
+2. **PRESENT** matches to user with clear explanation:
+   ```
+   I found an experimental skill that can help with your task:
+   - **pdf**: [description]
 
-## After Analysis
+   Would you like me to link it to this project? (/skill-lab:link)
+   ```
+3. **WAIT** for user response
+4. If YES → Run `/skill-lab:link`, then proceed with task
+5. If NO → Proceed without skill, note limitations
 
-If matching skills are found and the project is NOT already linked:
+### If Matches Found (Project Already Linked):
 
-1. Present the matches to the user
-2. Explain why each skill might be useful
-3. Ask: "Would you like to link these experimental skills to your project using `/skill-lab:link`?"
+- Proceed with task using the linked skills
+- Mention which skill you're using
 
-**Important:** Do NOT automatically link. Always ask the user for permission first.
+### If No Matches:
 
-## No Matches
+- Inform user no matching skills found
+- Proceed with task using standard capabilities
+- Suggest creating new skill if task is complex/recurring
 
-If no experimental skills exist or none match:
+## Example Workflow
 
-- Inform the user that no matching skills were found
-- Suggest they can create new skills in `~/Desktop/skills-experimental`
-- Mention they can check `/skill-lab:status` to see the environment state
+```
+User: "Help me extract tables from this PDF report"
+
+WRONG ❌: Immediately try to read the PDF
+
+RIGHT ✓:
+1. Run skill-matcher detect
+2. Find "pdf" skill matches
+3. Ask: "I have a 'pdf' skill for PDF manipulation. Link it first?"
+4. Wait for user confirmation
+5. If yes, run /skill-lab:link
+6. Then proceed with PDF extraction
+```

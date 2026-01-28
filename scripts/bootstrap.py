@@ -200,29 +200,42 @@ This is your stable/production skills folder.
         self.log(f"Worktree created: {self.experimental_path}", "OK")
         return True
 
-    def step5_create_venv(self) -> bool:
-        """Create Python virtual environment in experimental folder."""
-        self.log("Creating Python virtual environment...", "STEP")
-
-        venv_path = self.experimental_path / ".venv"
+    def _create_venv_for_path(self, target_path: Path, name: str) -> bool:
+        """Create Python virtual environment in a specified folder."""
+        venv_path = target_path / ".venv"
         if venv_path.exists():
-            self.log("Virtual environment already exists", "WARN")
+            self.log(f"{name} venv already exists", "WARN")
             return True
 
         success, output = self.run_command(
             [sys.executable, "-m", "venv", str(venv_path)]
         )
         if not success:
-            self.log(f"Failed: {output}", "ERROR")
+            self.log(f"Failed to create {name} venv: {output}", "ERROR")
             return False
 
         # Add .venv to .gitignore
-        gitignore_path = self.experimental_path / ".gitignore"
+        gitignore_path = target_path / ".gitignore"
         gitignore_content = ".venv/\n__pycache__/\n*.pyc\n.DS_Store\n"
-        gitignore_path.write_text(gitignore_content, encoding="utf-8")
+        if gitignore_path.exists():
+            existing = gitignore_path.read_text(encoding="utf-8")
+            if ".venv/" not in existing:
+                gitignore_path.write_text(existing + "\n" + gitignore_content, encoding="utf-8")
+        else:
+            gitignore_path.write_text(gitignore_content, encoding="utf-8")
 
-        self.log(f"Virtual environment created: {venv_path}", "OK")
+        self.log(f"{name} venv created: {venv_path}", "OK")
         return True
+
+    def step5_create_venv(self) -> bool:
+        """Create Python virtual environment in experimental folder."""
+        self.log("Creating experimental virtual environment...", "STEP")
+        return self._create_venv_for_path(self.experimental_path, "Experimental")
+
+    def step5b_create_stable_venv(self) -> bool:
+        """Create Python virtual environment in stable folder."""
+        self.log("Creating stable virtual environment...", "STEP")
+        return self._create_venv_for_path(self.stable_path, "Stable")
 
     def step6_create_global_link(self) -> bool:
         """Create junction/symlink from ~/.claude/skills to stable."""
@@ -248,9 +261,18 @@ This is your stable/production skills folder.
         # Create the link
         try:
             if self.os_type == "Windows":
+                # Windows requires cmd.exe for mklink command (not powershell)
+                # Junction (/J) usually doesn't require admin, but symlink (/D) does
                 cmd = f'mklink /J "{self.claude_skills_path}" "{self.stable_path}"'
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                result = subprocess.run(
+                    ["cmd.exe", "/c", cmd],
+                    capture_output=True,
+                    text=True
+                )
                 if result.returncode != 0:
+                    # Try with explicit cmd invocation if shell=True failed
+                    self.log("Junction creation failed, may need admin rights", "WARN")
+                    self.log(f"Error: {result.stderr.strip()}", "WARN")
                     raise Exception(result.stderr)
             else:
                 os.symlink(self.stable_path, self.claude_skills_path)
@@ -261,7 +283,14 @@ This is your stable/production skills folder.
         except Exception as e:
             self.log(f"Failed: {e}", "ERROR")
             if self.os_type == "Windows":
-                self.log("On Windows, try running as Administrator", "INFO")
+                self.log("", "INFO")
+                self.log("On Windows, please run this command manually in CMD as Administrator:", "INFO")
+                self.log(f'  mklink /J "{self.claude_skills_path}" "{self.stable_path}"', "INFO")
+                self.log("", "INFO")
+                self.log("Steps:", "INFO")
+                self.log("  1. Press Win+X, select 'Terminal (Admin)' or 'Command Prompt (Admin)'", "INFO")
+                self.log("  2. Copy and paste the mklink command above", "INFO")
+                self.log("  3. Re-run /skill-lab:setup to verify", "INFO")
             return False
 
     def _is_junction(self, path: Path) -> bool:
@@ -348,7 +377,8 @@ This is your stable/production skills folder.
             ("Initializing Git", self.step2_init_git_repo),
             ("Creating dev branch", self.step3_create_dev_branch),
             ("Creating experimental worktree", self.step4_create_worktree),
-            ("Creating virtual environment", self.step5_create_venv),
+            ("Creating experimental venv", self.step5_create_venv),
+            ("Creating stable venv", self.step5b_create_stable_venv),
             ("Creating global skills link", self.step6_create_global_link),
         ]
 

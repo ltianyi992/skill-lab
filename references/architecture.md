@@ -12,15 +12,17 @@ This architecture implements **physical isolation** between stable and experimen
         v (Junction/Symlink)
 ~/Desktop/skills-stable (main branch)
         |
-        +-- claude-env-manager/    <- Seeded Manager Skill
+        +-- .venv/                 <- Production Python environment
+        +-- requirements.txt       <- Synced dependencies
+        +-- pdf/                   <- Example stable skill
         |       +-- SKILL.md
-        |       +-- handler.py
         |
         +-- [other stable skills...]
 
 ~/Desktop/skills-experimental (dev branch - Git Worktree)
         |
-        +-- .venv/                 <- Isolated Python environment
+        +-- .venv/                 <- Development Python environment
+        +-- requirements.txt       <- Development dependencies
         +-- [experimental skills...]
 ```
 
@@ -75,6 +77,17 @@ The `~/.claude/skills` directory is Claude's global skill scope. By linking it t
 | macOS    | Symlink   | `ln -s source target` |
 | Linux    | Symlink   | `ln -s source target` |
 
+### Windows Special Handling
+
+On Windows, `mklink` requires:
+1. **cmd.exe** - PowerShell doesn't support `mklink` directly
+2. **May need Admin** - Junction creation sometimes requires elevated privileges
+
+If automatic creation fails, run manually in **Administrator CMD**:
+```cmd
+mklink /J "C:\Users\<username>\.claude\skills" "C:\Users\<username>\Desktop\skills-stable"
+```
+
 ### Safety Considerations
 
 - **Never overwrite existing directories**: The bootstrap checks if `~/.claude/skills` exists as a directory
@@ -88,13 +101,31 @@ The `~/.claude/skills` directory is Claude's global skill scope. By linking it t
 ```
 1. Develop in skills-experimental (dev branch)
    |
-2. Test and validate changes
+2. Install dependencies in experimental venv:
+   - pip install <package>
+   - pip freeze > requirements.txt
    |
-3. Use Manager Skill to sync:
+3. Test and validate changes
+   |
+4. Use /skill-lab:sync to sync:
    - git add & commit in experimental
    - git merge dev into main (in stable)
+   - Auto-install requirements.txt to stable venv
    |
-4. Changes now live in stable (global scope)
+5. Changes + dependencies now live in stable (global scope)
+```
+
+### Dependency Sync Flow
+
+```
+experimental/.venv          stable/.venv
+      |                           |
+      | pip install pypdf         |
+      v                           |
+requirements.txt ----sync----> requirements.txt
+                                  |
+                                  v
+                           pip install -r requirements.txt
 ```
 
 ### Rollback Strategy
@@ -110,19 +141,42 @@ git reset --hard HEAD~1
 
 ## Virtual Environment Isolation
 
-The experimental folder includes its own `.venv`:
+Both folders have their own `.venv`:
 
 ```bash
-~/Desktop/skills-experimental/.venv/
+~/Desktop/skills-experimental/.venv/    <- Development environment
+    bin/python    (or Scripts/python.exe on Windows)
+    lib/
+    ...
+
+~/Desktop/skills-stable/.venv/          <- Production environment
     bin/python    (or Scripts/python.exe on Windows)
     lib/
     ...
 ```
 
+### Environment Variables
+
+| Variable | Points To | Usage |
+|----------|-----------|-------|
+| `EXPERIMENTAL_PYTHON` | experimental/.venv/python | Development/testing |
+| `STABLE_PYTHON` | stable/.venv/python | Production skills |
+| `SKILL_PYTHON` | stable/.venv/python | Default for skill execution |
+
+### Why Two Venvs?
+
+| Aspect | Experimental | Stable |
+|--------|--------------|--------|
+| **Purpose** | Development & testing | Production use |
+| **Dependencies** | May have untested packages | Only synced, validated packages |
+| **Used by** | Developer during skill creation | Claude Code globally via ~/.claude/skills |
+| **Updated** | Manually by developer | Automatically on /skill-lab:sync |
+
 This ensures:
-- Experimental dependencies don't affect stable
+- Experimental dependencies don't affect production
 - Clean environment for testing new packages
-- Easy cleanup by deleting .venv
+- Automatic dependency sync on merge
+- Skills always have their required packages in production
 
 ## Benefits Summary
 

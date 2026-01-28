@@ -140,6 +140,41 @@ def check_project_linked(project_path: Path, experimental_path: Path) -> bool:
     return False
 
 
+def get_architecture_summary(stable_path: Path, experimental_path: Path, home: Path) -> str:
+    """Return a concise architecture summary for Claude's context."""
+    return f"""[Skill Lab Architecture Summary]
+
+BLUE-GREEN DEPLOYMENT MODEL:
+- STABLE (Production):  {stable_path}
+  └── Linked to ~/.claude/skills (global scope)
+  └── Has own .venv for production dependencies
+  └── Only contains tested, synced skills
+
+- EXPERIMENTAL (Development): {experimental_path}
+  └── For developing/testing new skills
+  └── Has own .venv for dev dependencies
+  └── Changes synced to stable via /skill-lab:sync
+
+KEY ENVIRONMENT VARIABLES:
+- $SKILL_PYTHON / $STABLE_PYTHON → stable/.venv/python (for production)
+- $EXPERIMENTAL_PYTHON → experimental/.venv/python (for development)
+
+WORKFLOW:
+1. Develop skills in experimental folder
+2. Install deps: pip install <pkg> && pip freeze > requirements.txt
+3. Test thoroughly
+4. Sync: /skill-lab:sync (auto-installs deps to stable venv)
+
+AVAILABLE COMMANDS:
+- /skill-lab:status - Check environment status
+- /skill-lab:sync - Sync experimental → stable
+- /skill-lab:link - Link project to experimental skills
+- /skill-lab:unlink - Unlink project
+- /skill-lab:skill-matcher - Find matching skills for project
+
+For detailed architecture: Read references/architecture.md in skill-lab project"""
+
+
 def main():
     # Read hook input from stdin
     try:
@@ -161,6 +196,9 @@ def main():
             "skill_lab_status": "not_initialized"
         }))
         return
+
+    # Get architecture summary
+    arch_summary = get_architecture_summary(stable_path, experimental_path, home)
 
     # Check if project is already linked
     is_linked = check_project_linked(project_path, experimental_path)
@@ -187,45 +225,72 @@ def main():
     if experimental_skills and not is_linked:
         # Build skill info for context
         skill_list = []
+        skill_keywords = []
         for skill in experimental_skills:
-            skill_info = f"- {skill['name']}"
+            skill_info = f"- **{skill['name']}**"
             if skill.get('description'):
                 skill_info += f": {skill['description']}"
             skill_list.append(skill_info)
+            # Extract keywords for matching (skill name and key terms)
+            skill_keywords.append(skill['name'].lower())
 
         skills_text = "\n".join(skill_list)
         extensions_text = ", ".join(project_data["extensions"][:10])
+        keywords_text = ", ".join(skill_keywords)
 
         # Output using hookSpecificOutput.additionalContext format
+        # Make the instruction more explicit and action-oriented
         output = {
             "hookSpecificOutput": {
-                "additionalContext": f"""[Skill Lab] Detected experimental skills available:
+                "additionalContext": f"""{arch_summary}
 
+---
+
+[Skill Lab - IMPORTANT WORKFLOW REMINDER]
+
+AVAILABLE EXPERIMENTAL SKILLS:
 {skills_text}
 
-Project file types: {extensions_text}
+PROJECT FILE TYPES: {extensions_text}
 
-The project is NOT currently linked to experimental skills.
-Use the skill-lab:skill-matcher agent to analyze if any experimental skills match this project's needs.
-If matches are found, ask the user: "I found experimental skills that may be useful for this project. Would you like to link them using /skill-lab:link?"
+CRITICAL WORKFLOW - BEFORE executing any task involving these keywords ({keywords_text}):
 
-Do NOT automatically link - always ask the user first."""
+1. STOP and CHECK: Does the user's request relate to any experimental skill above?
+2. If YES: IMMEDIATELY ask the user:
+   "I noticed you want to work with [topic]. I have an experimental skill that can help. Would you like me to link it to this project using /skill-lab:link?"
+3. If user agrees: Run /skill-lab:link first, THEN proceed with the task
+4. If user declines: Proceed without the skill
+
+EXAMPLE:
+- User says: "Help me edit this PDF"
+- You should FIRST say: "I have an experimental 'pdf' skill that can help with PDF manipulation. Would you like to link it?"
+- Do NOT jump directly to reading/editing the PDF
+
+This project is NOT currently linked to experimental skills.
+Remember: ASK FIRST, then ACT. Never skip the skill-matching step for relevant tasks."""
             }
         }
         print(json.dumps(output, indent=2))
     else:
-        # Output standard data for reference
+        # Output standard data for reference with architecture summary
+        linked_status = "LINKED to experimental" if is_linked else "NOT linked"
         output = {
+            "hookSpecificOutput": {
+                "additionalContext": f"""{arch_summary}
+
+---
+
+PROJECT STATUS: {linked_status}
+{"Use /skill-lab:unlink when done experimenting." if is_linked else "Use /skill-lab:link to connect experimental skills."}"""
+            },
             "skill_lab_status": "ready",
             "project": {
                 "path": str(project_path),
                 "is_linked_to_experimental": is_linked,
                 "extensions": project_data["extensions"][:20],
-                "extension_counts": dict(list(project_data["extension_counts"].items())[:20]),
                 "total_files": project_data["total_files"]
             },
-            "experimental_skills": experimental_skills,
-            "has_experimental_skills": len(experimental_skills) > 0
+            "experimental_skills_count": len(experimental_skills)
         }
         print(json.dumps(output, indent=2))
 
