@@ -175,20 +175,181 @@ This is your stable/production skills folder.
         self.log("Dev branch created", "OK")
         return True
 
+    def _is_valid_worktree(self) -> bool:
+        """Check if experimental path is a valid worktree of stable."""
+        if not self.experimental_path.exists():
+            return False
+
+        # Check git worktree list from stable
+        success, output = self.run_command(["git", "worktree", "list"], cwd=self.stable_path)
+        if not success:
+            return False
+
+        # Check if experimental path appears in worktree list
+        exp_str = str(self.experimental_path).replace("\\", "/")
+        for line in output.split("\n"):
+            if exp_str in line.replace("\\", "/") or "skills-experimental" in line:
+                return True
+        return False
+
+    def _is_independent_git_repo(self, path: Path) -> bool:
+        """Check if path is an independent git repository (not a worktree)."""
+        git_path = path / ".git"
+        if not git_path.exists():
+            return False
+        # If .git is a directory, it's a full repo; if it's a file, it's a worktree
+        return git_path.is_dir()
+
+    def _backup_directory(self, path: Path) -> Path:
+        """Backup a directory by renaming it."""
+        import time
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        backup_path = path.parent / f"{path.name}_backup_{timestamp}"
+
+        try:
+            path.rename(backup_path)
+            return backup_path
+        except Exception as e:
+            raise Exception(f"Failed to backup {path}: {e}")
+
+    def _try_convert_to_worktree(self) -> bool:
+        """Try to convert existing experimental directory to a worktree."""
+        self.log("Attempting to convert existing directory to worktree...", "INFO")
+
+        # Check if it's an independent git repo
+        if self._is_independent_git_repo(self.experimental_path):
+            self.log("Detected independent Git repository", "WARN")
+
+            # Check for uncommitted changes
+            success, status_output = self.run_command(
+                ["git", "status", "--porcelain"],
+                cwd=self.experimental_path
+            )
+
+            has_changes = bool(status_output.strip())
+
+            # List existing skills (directories with SKILL.md)
+            existing_skills = []
+            try:
+                for item in self.experimental_path.iterdir():
+                    if item.is_dir() and (item / "SKILL.md").exists():
+                        existing_skills.append(item.name)
+            except Exception:
+                pass
+
+            if existing_skills:
+                self.log(f"Found existing skills: {', '.join(existing_skills)}", "INFO")
+
+            if has_changes:
+                self.log("Repository has uncommitted changes", "WARN")
+
+            # Backup the existing directory
+            self.log("Backing up existing directory...", "INFO")
+            try:
+                backup_path = self._backup_directory(self.experimental_path)
+                self.log(f"Backed up to: {backup_path}", "OK")
+            except Exception as e:
+                self.log(f"Backup failed: {e}", "ERROR")
+                self.log("Please manually backup and remove the directory:", "ERROR")
+                self.log(f"  {self.experimental_path}", "ERROR")
+                return False
+
+            # Now create the worktree
+            success, output = self.run_command(
+                ["git", "worktree", "add", str(self.experimental_path), "dev"],
+                cwd=self.stable_path
+            )
+            if not success:
+                self.log(f"Failed to create worktree: {output}", "ERROR")
+                # Try to restore backup
+                try:
+                    backup_path.rename(self.experimental_path)
+                    self.log("Restored backup", "INFO")
+                except Exception:
+                    pass
+                return False
+
+            self.log("Worktree created successfully", "OK")
+
+            # Copy skills from backup if any
+            if existing_skills:
+                self.log("Restoring skills from backup...", "INFO")
+                for skill_name in existing_skills:
+                    src = backup_path / skill_name
+                    dst = self.experimental_path / skill_name
+                    try:
+                        import shutil
+                        if src.exists() and not dst.exists():
+                            shutil.copytree(src, dst)
+                            self.log(f"  Restored: {skill_name}", "OK")
+                    except Exception as e:
+                        self.log(f"  Failed to restore {skill_name}: {e}", "WARN")
+
+                # Stage and commit restored skills
+                self.run_command(["git", "add", "."], cwd=self.experimental_path)
+                self.run_command(
+                    ["git", "commit", "-m", "Restore skills from backup during worktree conversion"],
+                    cwd=self.experimental_path
+                )
+
+            self.log(f"Backup preserved at: {backup_path}", "INFO")
+            self.log("You can delete the backup after verifying everything works", "INFO")
+            return True
+
+        else:
+            # Directory exists but is not a git repo - just backup and recreate
+            self.log("Directory exists but is not a Git repository", "WARN")
+
+            try:
+                backup_path = self._backup_directory(self.experimental_path)
+                self.log(f"Backed up to: {backup_path}", "OK")
+            except Exception as e:
+                self.log(f"Backup failed: {e}", "ERROR")
+                return False
+
+            # Create worktree
+            success, output = self.run_command(
+                ["git", "worktree", "add", str(self.experimental_path), "dev"],
+                cwd=self.stable_path
+            )
+            if not success:
+                self.log(f"Failed to create worktree: {output}", "ERROR")
+                return False
+
+            self.log("Worktree created successfully", "OK")
+            return True
+
     def step4_create_worktree(self) -> bool:
         """Create Git worktree for experimental folder."""
         self.log("Creating experimental worktree...", "STEP")
 
         if self.experimental_path.exists():
-            self.log(f"Already exists: {self.experimental_path}", "WARN")
-            # Check if it's a valid worktree
-            success, output = self.run_command(["git", "worktree", "list"], cwd=self.stable_path)
-            if str(self.experimental_path) in output or "skills-experimental" in output:
+            self.log(f"Directory exists: {self.experimental_path}", "INFO")
+
+            # Check if it's already a valid worktree
+            if self._is_valid_worktree():
                 self.log("Valid worktree detected", "OK")
                 return True
-            self.log("Directory exists but not a worktree - may need manual cleanup", "WARN")
+
+            # Not a valid worktree - this is the bug case!
+            self.log("Directory exists but is NOT a valid worktree!", "WARN")
+            self.log("This can cause sync issues between stable and experimental.", "WARN")
+
+            # Try to fix it
+            if not self._try_convert_to_worktree():
+                self.log("", "ERROR")
+                self.log("SETUP FAILED: Cannot create worktree structure.", "ERROR")
+                self.log("", "ERROR")
+                self.log("Manual fix required:", "ERROR")
+                self.log(f"  1. Backup any important files from: {self.experimental_path}", "ERROR")
+                self.log(f"  2. Delete the directory: {self.experimental_path}", "ERROR")
+                self.log("  3. Re-run /skill-lab:setup", "ERROR")
+                self.log("", "ERROR")
+                return False
+
             return True
 
+        # Directory doesn't exist - create fresh worktree
         success, output = self.run_command(
             ["git", "worktree", "add", str(self.experimental_path), "dev"],
             cwd=self.stable_path
@@ -306,58 +467,111 @@ This is your stable/production skills folder.
             return False
 
     def _verify_setup(self) -> bool:
-        """Verify the setup is correct, especially the global link target."""
+        """Verify the setup is correct, especially worktree and global link."""
         self.log("Verifying setup...", "STEP")
 
-        # Verify global link exists
+        errors = []
+
+        # 1. Verify worktree structure
+        self.log("Checking worktree structure...", "INFO")
+        if not self._is_valid_worktree():
+            errors.append("Experimental folder is NOT a valid worktree of stable!")
+            self.log("  Worktree: INVALID", "ERROR")
+        else:
+            self.log("  Worktree: OK", "OK")
+
+        # 2. Verify both directories exist
+        if not self.stable_path.exists():
+            errors.append(f"Stable folder does not exist: {self.stable_path}")
+        if not self.experimental_path.exists():
+            errors.append(f"Experimental folder does not exist: {self.experimental_path}")
+
+        # 3. Verify both have .venv
+        stable_venv = self.stable_path / ".venv"
+        exp_venv = self.experimental_path / ".venv"
+        if not stable_venv.exists():
+            self.log("  Stable venv: MISSING", "WARN")
+        else:
+            self.log("  Stable venv: OK", "OK")
+        if not exp_venv.exists():
+            self.log("  Experimental venv: MISSING", "WARN")
+        else:
+            self.log("  Experimental venv: OK", "OK")
+
+        # 4. Verify global link exists
         if not self.claude_skills_path.exists():
-            self.log(f"Global link does not exist: {self.claude_skills_path}", "ERROR")
+            errors.append(f"Global link does not exist: {self.claude_skills_path}")
+            self.log("  Global link: MISSING", "ERROR")
+        else:
+            # Check what the link points to
+            try:
+                if self.claude_skills_path.is_symlink():
+                    target = self.claude_skills_path.resolve()
+                elif self._is_junction(self.claude_skills_path):
+                    # For Windows junctions, use dir command to check target
+                    result = subprocess.run(
+                        f'dir "{self.claude_skills_path.parent}" /AL',
+                        shell=True, capture_output=True, text=True
+                    )
+                    # Parse output to find junction target
+                    target = self.stable_path  # Default assumption
+                    if "skills-stable" in result.stdout:
+                        target = self.stable_path
+                    elif "skills-experimental" in result.stdout:
+                        target = self.experimental_path
+                        errors.append("Global link points to experimental instead of stable!")
+                        self.log("  Global link: WRONG TARGET (experimental)", "ERROR")
+                else:
+                    self.log("  Global link: Is a directory (not a link)", "WARN")
+                    target = None
+
+                if target:
+                    # Verify target is stable, not experimental
+                    stable_resolved = self.stable_path.resolve()
+                    experimental_resolved = self.experimental_path.resolve()
+
+                    if str(target) == str(stable_resolved):
+                        self.log("  Global link: -> skills-stable (OK)", "OK")
+                    elif str(target) == str(experimental_resolved):
+                        errors.append("Global link points to experimental instead of stable!")
+                        self.log("  Global link: -> skills-experimental (WRONG!)", "ERROR")
+                    else:
+                        self.log(f"  Global link: -> {target} (unknown)", "WARN")
+
+            except Exception as e:
+                self.log(f"  Could not verify link target: {e}", "WARN")
+
+        # 5. Verify git branches
+        self.log("Checking Git branches...", "INFO")
+        success, stable_branch = self.run_command(
+            ["git", "branch", "--show-current"],
+            cwd=self.stable_path
+        )
+        success2, exp_branch = self.run_command(
+            ["git", "branch", "--show-current"],
+            cwd=self.experimental_path
+        )
+        stable_branch = stable_branch.strip() if success else "unknown"
+        exp_branch = exp_branch.strip() if success2 else "unknown"
+
+        self.log(f"  Stable branch: {stable_branch}", "OK" if stable_branch in ["main", "master"] else "WARN")
+        self.log(f"  Experimental branch: {exp_branch}", "OK" if exp_branch == "dev" else "WARN")
+
+        if exp_branch != "dev":
+            self.log("  Expected experimental to be on 'dev' branch", "WARN")
+
+        # Report errors
+        if errors:
+            self.log("", "ERROR")
+            self.log("VERIFICATION FAILED:", "ERROR")
+            for error in errors:
+                self.log(f"  - {error}", "ERROR")
+            self.log("", "ERROR")
+            self.log("The environment may not work correctly for syncing.", "ERROR")
+            self.log("Consider re-running /skill-lab:setup or manual fixes.", "ERROR")
             return False
 
-        # Check what the link points to
-        try:
-            if self.claude_skills_path.is_symlink():
-                target = self.claude_skills_path.resolve()
-            elif self._is_junction(self.claude_skills_path):
-                # For Windows junctions, use dir command to check target
-                import subprocess
-                result = subprocess.run(
-                    f'dir "{self.claude_skills_path.parent}" /AL',
-                    shell=True, capture_output=True, text=True
-                )
-                # Parse output to find junction target
-                target = self.stable_path  # Default assumption
-                if "skills-stable" in result.stdout:
-                    target = self.stable_path
-                elif "skills-experimental" in result.stdout:
-                    target = self.experimental_path
-                    self.log(f"ERROR: Global link points to experimental!", "ERROR")
-                    self.log(f"  Expected: {self.stable_path}", "ERROR")
-                    self.log(f"  Actual:   skills-experimental", "ERROR")
-                    return False
-            else:
-                self.log(f"Global skills path is a directory, not a link", "WARN")
-                return True
-
-            # Verify target is stable, not experimental
-            stable_resolved = self.stable_path.resolve()
-            experimental_resolved = self.experimental_path.resolve()
-
-            if str(target) == str(stable_resolved):
-                self.log(f"Verified: Global link -> skills-stable", "OK")
-                return True
-            elif str(target) == str(experimental_resolved):
-                self.log(f"ERROR: Global link points to experimental!", "ERROR")
-                self.log(f"  Expected: {self.stable_path}", "ERROR")
-                self.log(f"  Actual:   {target}", "ERROR")
-                return False
-            else:
-                self.log(f"Warning: Global link points to unknown target: {target}", "WARN")
-                return True
-
-        except Exception as e:
-            self.log(f"Could not verify link target: {e}", "WARN")
-            return True  # Don't fail on verification errors
+        return True
 
     def run(self) -> bool:
         """Execute the complete bootstrap process."""

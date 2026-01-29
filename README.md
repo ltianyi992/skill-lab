@@ -61,12 +61,14 @@ Claude Code 的 Skills 让 AI 拥有了可扩展的能力——你可以从网�
 
 ### 安装
 
+> **注意**：以下命令需要在 Claude Code 中执行。请先启动 Claude Code（在终端中运行 `claude`），然后在对话框中输入这些命令。
+
 ```bash
 # 1. 添加插件源
-/plugin marketplace add your-username/skill-lab
+/plugin marketplace add ltianyi992/skill-lab
 
 # 2. 安装插件
-/plugin install skill-lab@your-username-skill-lab
+/plugin install skill-lab@ltianyi992-skill-lab
 
 # 3. 初始化环境（只需运行一次）
 /skill-lab:setup

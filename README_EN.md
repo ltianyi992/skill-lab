@@ -61,12 +61,14 @@ Your Project
 
 ### Installation
 
+> **Note**: The following commands must be run inside Claude Code. First start Claude Code (run `claude` in your terminal), then enter these commands in the chat.
+
 ```bash
 # 1. Add the plugin source
-/plugin marketplace add your-username/skill-lab
+/plugin marketplace add ltianyi992/skill-lab
 
 # 2. Install the plugin
-/plugin install skill-lab@your-username-skill-lab
+/plugin install skill-lab@ltianyi992-skill-lab
 
 # 3. Initialize the environment (run once)
 /skill-lab:setup

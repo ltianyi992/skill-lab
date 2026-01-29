@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-SessionStart Hook for Skill Lab
+PreToolUse Hook for Skill Lab
 
-This hook runs when a Claude Code session starts.
-It detects the project context and checks for relevant experimental skills.
+This hook runs BEFORE Read|Glob tool execution.
+It detects if the project has matching experimental skills and uses
+HARD permission control to ensure Claude asks about linking first.
 
-Output is JSON that Claude will interpret to decide whether to suggest
-linking the project to experimental skills.
+Uses permissionDecision: "deny" to block tool execution until skill linking is addressed.
 """
 
 import json
@@ -15,7 +15,30 @@ import os
 from pathlib import Path
 
 
-def get_project_extensions(project_path: Path, max_files: int = 500) -> dict:
+def get_state_file() -> Path:
+    """Get the session state file path."""
+    return Path.home() / ".claude" / "skill-lab-pretool-state.json"
+
+
+def load_state() -> dict:
+    """Load the session state."""
+    state_file = get_state_file()
+    if state_file.exists():
+        try:
+            return json.loads(state_file.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
+
+
+def save_state(state: dict):
+    """Save the session state."""
+    state_file = get_state_file()
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps(state, indent=2), encoding='utf-8')
+
+
+def get_project_extensions(project_path: Path, max_files: int = 200) -> dict:
     """Scan project for file extensions without reading contents."""
 
     ignored_dirs = {
@@ -43,7 +66,6 @@ def get_project_extensions(project_path: Path, max_files: int = 500) -> dict:
             if not file.is_file():
                 continue
 
-            # Skip ignored directories
             skip = False
             for part in file.parts:
                 if part in ignored_dirs or part.startswith('.'):
@@ -87,7 +109,6 @@ def get_experimental_skills(experimental_path: Path) -> list:
         if not skill_md.exists():
             continue
 
-        # Parse frontmatter for name and description
         try:
             content = skill_md.read_text(encoding='utf-8')
             import re
@@ -121,11 +142,11 @@ def check_project_linked(project_path: Path, experimental_path: Path) -> bool:
     if not local_skills.exists():
         return False
 
-    # Check if it's a link pointing to experimental
     try:
         if local_skills.is_symlink():
             target = local_skills.resolve()
             return str(target) == str(experimental_path.resolve())
+
         # Windows junction check
         import platform
         if platform.system() == "Windows":
@@ -140,39 +161,55 @@ def check_project_linked(project_path: Path, experimental_path: Path) -> bool:
     return False
 
 
-def get_architecture_summary(stable_path: Path, experimental_path: Path, home: Path) -> str:
-    """Return a concise architecture summary for Claude's context."""
-    return f"""[Skill Lab Architecture Summary]
+def simple_skill_match(extensions: list, skills: list) -> list:
+    """Simple matching between file extensions and skill names/descriptions."""
 
-BLUE-GREEN DEPLOYMENT MODEL:
-- STABLE (Production):  {stable_path}
-  └── Linked to ~/.claude/skills (global scope)
-  └── Has own .venv for production dependencies
-  └── Only contains tested, synced skills
+    matches = []
 
-- EXPERIMENTAL (Development): {experimental_path}
-  └── For developing/testing new skills
-  └── Has own .venv for dev dependencies
-  └── Changes synced to stable via /skill-lab:sync
+    # Extension to keyword mapping
+    ext_keywords = {
+        '.pdf': ['pdf'],
+        '.doc': ['doc', 'word', 'document'],
+        '.docx': ['doc', 'word', 'document'],
+        '.xls': ['excel', 'spreadsheet'],
+        '.xlsx': ['excel', 'spreadsheet'],
+        '.ppt': ['powerpoint', 'presentation'],
+        '.pptx': ['powerpoint', 'presentation'],
+        '.py': ['python', 'script'],
+        '.js': ['javascript', 'node', 'frontend'],
+        '.ts': ['typescript', 'node', 'frontend'],
+        '.jsx': ['react', 'frontend'],
+        '.tsx': ['react', 'typescript', 'frontend'],
+        '.vue': ['vue', 'frontend'],
+        '.sql': ['sql', 'database', 'query'],
+        '.json': ['json', 'config'],
+        '.yaml': ['yaml', 'config', 'ci'],
+        '.yml': ['yaml', 'config', 'ci'],
+        '.md': ['markdown', 'doc'],
+        '.csv': ['csv', 'data'],
+    }
 
-KEY ENVIRONMENT VARIABLES:
-- $SKILL_PYTHON / $STABLE_PYTHON → stable/.venv/python (for production)
-- $EXPERIMENTAL_PYTHON → experimental/.venv/python (for development)
+    for skill in skills:
+        skill_name = skill['name'].lower()
+        skill_desc = skill.get('description', '').lower()
+        skill_text = f"{skill_name} {skill_desc}"
 
-WORKFLOW:
-1. Develop skills in experimental folder
-2. Install deps: pip install <pkg> && pip freeze > requirements.txt
-3. Test thoroughly
-4. Sync: /skill-lab:sync (auto-installs deps to stable venv)
+        matched_exts = []
+        for ext in extensions:
+            keywords = ext_keywords.get(ext, [ext.replace('.', '')])
+            for keyword in keywords:
+                if keyword in skill_text:
+                    matched_exts.append(ext)
+                    break
 
-AVAILABLE COMMANDS:
-- /skill-lab:status - Check environment status
-- /skill-lab:sync - Sync experimental → stable
-- /skill-lab:link - Link project to experimental skills
-- /skill-lab:unlink - Unlink project
-- /skill-lab:skill-matcher - Find matching skills for project
+        if matched_exts:
+            matches.append({
+                "skill": skill['name'],
+                "matched_extensions": list(set(matched_exts)),
+                "description": skill.get('description', '')
+            })
 
-For detailed architecture: Read references/architecture.md in skill-lab project"""
+    return matches
 
 
 def main():
@@ -184,6 +221,8 @@ def main():
 
     cwd = hook_input.get("cwd", os.getcwd())
     project_path = Path(cwd)
+    session_id = hook_input.get("session_id", "unknown")
+    tool_name = hook_input.get("tool_name", "")
 
     home = Path.home()
     experimental_path = home / "Desktop" / "skills-experimental"
@@ -191,108 +230,88 @@ def main():
 
     # Check if skill-lab is set up
     if not experimental_path.exists() or not stable_path.exists():
-        # Skill lab not initialized, output nothing
-        print(json.dumps({
-            "skill_lab_status": "not_initialized"
-        }))
-        return
+        # Skill lab not initialized, allow tool to proceed
+        sys.exit(0)
 
-    # Get architecture summary
-    arch_summary = get_architecture_summary(stable_path, experimental_path, home)
+    # Load state to check if we've already prompted for this project in this session
+    state = load_state()
+    project_key = str(project_path)
+
+    # Check if already prompted for this project
+    prompted_projects = state.get("prompted_projects", {})
+    if project_key in prompted_projects:
+        # Already prompted, allow tool to proceed
+        sys.exit(0)
 
     # Check if project is already linked
     is_linked = check_project_linked(project_path, experimental_path)
 
-    # Get project info
-    project_data = get_project_extensions(project_path)
+    if is_linked:
+        # Already linked, save state for PostToolUse to remind about unlinking
+        state["linked_project"] = project_key
+        state["session_id"] = session_id
+        save_state(state)
+        sys.exit(0)
 
     # Get experimental skills
     experimental_skills = get_experimental_skills(experimental_path)
 
-    # If linked, set flag for stop hook to potentially remind about unlinking
-    if is_linked:
-        # Write state file for stop hook to read
-        state_file = home / ".claude" / "skill-lab-session-state.json"
-        state_file.parent.mkdir(parents=True, exist_ok=True)
-        state_file.write_text(json.dumps({
-            "project_linked": True,
-            "project_path": str(project_path),
-            "session_id": hook_input.get("session_id", "unknown")
-        }))
+    if not experimental_skills:
+        # No experimental skills available, allow tool to proceed
+        sys.exit(0)
 
-    # Check if we should prompt about experimental skills
-    # Conditions: has experimental skills, project not linked, project has matching extensions
-    if experimental_skills and not is_linked:
-        # Build skill info for context
-        skill_list = []
-        skill_keywords = []
-        for skill in experimental_skills:
-            skill_info = f"- **{skill['name']}**"
-            if skill.get('description'):
-                skill_info += f": {skill['description']}"
-            skill_list.append(skill_info)
-            # Extract keywords for matching (skill name and key terms)
-            skill_keywords.append(skill['name'].lower())
+    # Get project extensions
+    project_data = get_project_extensions(project_path)
 
-        skills_text = "\n".join(skill_list)
-        extensions_text = ", ".join(project_data["extensions"][:10])
-        keywords_text = ", ".join(skill_keywords)
+    if not project_data["extensions"]:
+        # No relevant files found, allow tool to proceed
+        sys.exit(0)
 
-        # Output using hookSpecificOutput.additionalContext format
-        # Make the instruction more explicit and action-oriented
-        output = {
-            "hookSpecificOutput": {
-                "additionalContext": f"""{arch_summary}
+    # Check for matches
+    matches = simple_skill_match(project_data["extensions"], experimental_skills)
 
----
+    if not matches:
+        # No matches, allow tool to proceed
+        prompted_projects[project_key] = {"matched": False, "session_id": session_id}
+        state["prompted_projects"] = prompted_projects
+        save_state(state)
+        sys.exit(0)
 
-[Skill Lab - IMPORTANT WORKFLOW REMINDER]
+    # Found matches! Mark as prompted and DENY the tool to force Claude to ask user
+    prompted_projects[project_key] = {"matched": True, "session_id": session_id}
+    state["prompted_projects"] = prompted_projects
+    save_state(state)
 
-AVAILABLE EXPERIMENTAL SKILLS:
-{skills_text}
+    # Build match description
+    match_lines = []
+    for m in matches[:3]:  # Top 3 matches
+        exts = ", ".join(m["matched_extensions"][:3])
+        match_lines.append(f"- {m['skill']}: matches {exts}")
+    matches_text = "\n".join(match_lines)
 
-PROJECT FILE TYPES: {extensions_text}
+    # HARD DENY - This blocks the tool execution and forces Claude to address this first
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": f"""[Skill Lab - Action Required]
 
-CRITICAL WORKFLOW - BEFORE executing any task involving these keywords ({keywords_text}):
+Detected matching experimental skills for this project:
 
-1. STOP and CHECK: Does the user's request relate to any experimental skill above?
-2. If YES: IMMEDIATELY ask the user:
-   "I noticed you want to work with [topic]. I have an experimental skill that can help. Would you like me to link it to this project using /skill-lab:link?"
-3. If user agrees: Run /skill-lab:link first, THEN proceed with the task
-4. If user declines: Proceed without the skill
+{matches_text}
 
-EXAMPLE:
-- User says: "Help me edit this PDF"
-- You should FIRST say: "I have an experimental 'pdf' skill that can help with PDF manipulation. Would you like to link it?"
-- Do NOT jump directly to reading/editing the PDF
+REQUIRED ACTION:
+Ask the user: "I found experimental skills that match your project. Would you like to link them using /skill-lab:link?"
 
-This project is NOT currently linked to experimental skills.
-Remember: ASK FIRST, then ACT. Never skip the skill-matching step for relevant tasks."""
-            }
+- If user agrees: Run /skill-lab:link first
+- If user declines: Note their preference and proceed normally
+
+This prompt will only appear once per project per session."""
         }
-        print(json.dumps(output, indent=2))
-    else:
-        # Output standard data for reference with architecture summary
-        linked_status = "LINKED to experimental" if is_linked else "NOT linked"
-        output = {
-            "hookSpecificOutput": {
-                "additionalContext": f"""{arch_summary}
+    }
 
----
-
-PROJECT STATUS: {linked_status}
-{"Use /skill-lab:unlink when done experimenting." if is_linked else "Use /skill-lab:link to connect experimental skills."}"""
-            },
-            "skill_lab_status": "ready",
-            "project": {
-                "path": str(project_path),
-                "is_linked_to_experimental": is_linked,
-                "extensions": project_data["extensions"][:20],
-                "total_files": project_data["total_files"]
-            },
-            "experimental_skills_count": len(experimental_skills)
-        }
-        print(json.dumps(output, indent=2))
+    print(json.dumps(output))
+    sys.exit(0)
 
 
 if __name__ == "__main__":
